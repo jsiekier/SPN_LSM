@@ -1,0 +1,82 @@
+#!/bin/bash
+#SBATCH -t 48:00:00
+#SBATCH -A ki-dm
+#SBATCH -p ki-parallel
+#SBATCH --mem=360G
+#SBATCH -J cf_creation #linkage
+#SBATCH --mail-type=None
+#SBATCH -o cf_creation-%A.%a.output
+#SBATCH -n 1 #number of tasks
+#SBATCH --cpus-per-task=64
+
+module load tools/Apptainer/1.3.4-GCCcore-13.3.0
+
+
+source /home/jsiekier/.bashrc
+conda_initialize
+micromamba activate cnn_spn #cf_eval
+export PYTHONNOUSERSITE=1
+
+
+export SINGULARITY_TMPDIR=/lustre/project/ki-topml/jsiekiera/apptainer_tmp
+export APPTAINER_CACHEDIR=/lustre/project/ki-topml/jsiekiera/apptainer_cache
+
+
+
+model_name="$1"
+
+fine_tune="$2"
+dataset_name="$3"
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.01 --gamma 0.01 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.01 --gamma 0.01 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.1 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.01 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.001 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.0001 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.1 --gamma 0.1 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.001 --gamma 0.001 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0001 --gamma 0.0001 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.1 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.01 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.001 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0001 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.1 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.01 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.001 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.0001 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.1 --gamma 0.1 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.001 --gamma 0.001 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0001 --gamma 0.0001 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.1 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.01 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.001 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0001 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.5 --gamma 0.0 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.5 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.5 --gamma 0.5 --model_name="MLP" --fine_tune 0 --dataset_name "$dataset_name"
+
+
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.5 --gamma 0.0 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.0 --gamma 0.5 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+srun python cf_creation_all.py --filepath "$model_name" --beta 0.5 --gamma 0.5 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
+
+
+ 
+
+

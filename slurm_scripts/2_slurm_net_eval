@@ -1,0 +1,45 @@
+#!/bin/bash
+#SBATCH -t 12:00:00 #02:00:00 #5 hours#02:00:00#
+#SBATCH -A ki-dm #ki-topml #
+#SBATCH -p a40 #a100ai # #bigmem #parallel #m2_gpu #bigmem # devel -64,96,128 GB Max
+#SBATCH --mem=246000 #246000 #360000 # 360000 #512000 #memory in MB#36000# 246000
+#SBATCH -J spn_eval #linkage
+#SBATCH --mail-type=None
+#SBATCH -o spn_eval-%A.%a.output
+#SBATCH -e spn_eval-%A.%a.error
+#SBATCH -n 1 #number of tasks
+#SBATCH -c 1 #number of cores (use more for multithreading)
+#SBATCH --gres=gpu:1
+#SBATCH --array=1-1
+
+module load tools/Apptainer/1.3.4-GCCcore-13.3.0
+
+source /home/jsiekier/.bashrc
+conda_initialize
+micromamba activate cnn_spn
+export PYTHONNOUSERSITE=1
+
+#cf_eval
+
+
+export SINGULARITY_TMPDIR=/lustre/project/ki-topml/jsiekiera/apptainer_tmp
+export APPTAINER_CACHEDIR=/lustre/project/ki-topml/jsiekiera/apptainer_cache
+
+
+model_names="$1"
+eval_method="$2"
+dataset_name="$3"
+
+
+
+nvidia-smi
+
+apptainer exec --nv \
+    -B /lustre/project/ki-topml/jsiekiera/micromamba_envs:/envs \
+    -B /lustre/project/ki-topml/jsiekiera:/data_in \
+    docker://tensorflow/tensorflow:2.13.0-gpu \
+    /envs/envs/cnn_spn/bin/python main_analysis.py --model_names "$model_names" --eval_method "$eval_method" --fine_tune $SLURM_ARRAY_TASK_ID --dataset_name "$dataset_name"
+
+
+
+

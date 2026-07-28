@@ -1,7 +1,7 @@
 import random
 import psutil
 import GPUtil
-
+import pandas as pd
 import tensorflow as tf
 import numpy as np
 import time
@@ -11,10 +11,12 @@ from tensorflow.keras import regularizers
 from sklearn.metrics import accuracy_score
 from sklearn import metrics as sk_metrics
 from sklearn.metrics import balanced_accuracy_score
-import gc
-from VAE import Resnet_VAE, make_pretrain_encoder
+from VanillaVAE import Resnet_VAE, make_pretrain_encoder
 from utils import data_to_batch
 import sys
+from scipy import stats
+from scipy.stats import spearmanr
+from plot_fkts import save_example_rec
 tf.random.set_seed(0)
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -34,7 +36,7 @@ def get_memory_usage():
 
     # Get GPU memory usage (sum over all available GPUs)
     gpus = GPUtil.getGPUs()
-    gpu_memory = sum(gpu.memoryUsed for gpu in gpus) if gpus else 0  # in GB
+    gpu_memory = sum(gpu.memoryUsed for gpu in gpus)/ 1024  if gpus else 0  # in GB
 
     return cpu_memory, gpu_memory
 
@@ -54,13 +56,14 @@ def create_CNN(grid_params,input_shape,num_classes,add_info):
     num_layer=grid_params.num_layer
     dropout=grid_params.dropout
     filter_size=grid_params.filter_size
-    last_num_filters=grid_params.last_num_filters
+    #dense_lay_num=grid_params.dense_lay_num
+    last_num_filters=64#grid_params.last_num_filters
 
     last_pic_divisor = 2 ** (num_layer - 1)
-
+    #print('DEBUG divisor',last_pic_divisor,num_layer,input_shape[0],flush=True)
 
     last_pic_len = int(input_shape[0]/last_pic_divisor)
-
+    #print('DEBUG divisor', last_pic_len)
 
     layer_arr = [tf.keras.Input(shape=input_shape,dtype=tf.dtypes.float32)]
     if use_augmentation:
@@ -75,6 +78,7 @@ def create_CNN(grid_params,input_shape,num_classes,add_info):
     if use_rescaling:
         layer_arr.append(layers.Rescaling(1. / 255))
     for lay_num in range(num_layer-1):
+        #num_filters = min(256,16 * (2 ** lay_num))
         num_filters=16 * (2 ** lay_num)
         layer_arr.extend([
 
@@ -85,45 +89,108 @@ def create_CNN(grid_params,input_shape,num_classes,add_info):
             tf.keras.layers.BatchNormalization(),
         ])
     layer_arr.extend([
+        #tf.keras.layers.BatchNormalization(),
         layers.Dropout(dropout / 2 ** num_layer),
         layers.Conv2D(last_num_filters, filter_size, padding='same', activation='relu'),
         tf.keras.layers.BatchNormalization(),
-
+        #tf.keras.layers.Activation('tanh')
+        #layers.MaxPooling2D(),
     ])
     layer_arr.extend([
         layers.MaxPooling2D(pool_size=(last_pic_len,last_pic_len)),
+        #tf.math.reduce_max(embedding, axis=(1, 2)),
         layers.Flatten(),
-        layers.Dense(num_classes, name="outputs")
+        #Discretizer_layer(),
+        # tf.keras.layers.Discretization(bin_boundaries=[0.0],dtype=tf.dtypes.float32),
+        #layers.Dense(256, activation='relu'),
+        #layers.Dense(num_classes, name="outputs")
     ])
     if num_classes==1:
-        layer_arr.append(layers.Sigmoid())
+        layer_arr.append(layers.Dense(num_classes, name="outputs", activation='sigmoid'))
+    else:
+        layer_arr.append(layers.Dense(num_classes, name="outputs"))
 
     model = Sequential(layer_arr)
     print('num trainable vars',len(model.trainable_variables))
 
     return model
 
+def create_base_CNN(input_shape):
+    num_layer=6
+    dropout=0.0
+    filter_size=4
+    last_num_filters=64
 
+    last_pic_divisor = 2 ** (num_layer - 1)
+    #print('DEBUG divisor',last_pic_divisor,num_layer,input_shape[0],flush=True)
+
+    last_pic_len = int(input_shape[0]/last_pic_divisor)
+    #print('DEBUG divisor', last_pic_len)
+
+    layer_arr = [tf.keras.Input(shape=input_shape,dtype=tf.dtypes.float32)]
+
+    for lay_num in range(num_layer-1):
+        layer_arr.extend([
+
+            layers.Dropout(dropout / 2 ** lay_num),
+            layers.Conv2D(16 * (2 ** lay_num), filter_size, padding='same', activation='relu'),
+            layers.MaxPooling2D(),
+            #tf.keras.layers.BatchNormalization(),
+        ])
+    layer_arr.extend([
+        #tf.keras.layers.BatchNormalization(),
+        layers.Dropout(dropout / 2 ** num_layer),
+        layers.Conv2D(last_num_filters, filter_size, padding='same', activation='relu'),
+        #tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation('tanh')
+        #layers.MaxPooling2D(),
+    ])
+    layer_arr.extend([
+        layers.MaxPooling2D(pool_size=(last_pic_len,last_pic_len)),
+        layers.Flatten(name='flatten_xy'),
+    ])
+
+
+    model = Sequential(layer_arr)
+
+    return model
 
 def load_CNN(grid_params, input_shape, num_classes,debugging,ckpt,manager,checkpoint_path,
              train_data,test_data,val_data,add_info):
     if grid_params.load_pretrain_model:
+        # model = load_pretrain(grid_params, input_shape, num_classes)
         model=load_pretrain_costume(grid_params,input_shape,num_classes)
     else:
-        model = create_CNN(grid_params, input_shape, num_classes,add_info)
+        '''
+        base_model=create_base_CNN(input_shape)
+        model = Sequential([
+            base_model,
+            layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001),
+            layers.Dense(256, kernel_regularizer=regularizers.l2(l=0.016), activity_regularizer=regularizers.l1(0.006),
+                         bias_regularizer=regularizers.l1(0.006), activation='relu'),
+            layers.Dropout(rate=0.4, seed=75),
+            layers.Dense(num_classes)  # , activation='softmax'
+        ])
+
+        '''
+        #optimizer = tf.keras.optimizers.Adamax(learning_rate=0.001)
+        model = create_CNN(grid_params, input_shape, num_classes)
     learning_rate = grid_params.fine_tune_rate#grid_params.learning_rate
     optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     model.compile(optimizer=optimizer,
                   loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
                   # reduction=tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
                   metrics=['accuracy'])
-
+    # print model summary
+    #model.summary()
     ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=optimizer, net=model)
     manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=1)
     ckpt.restore(manager.latest_checkpoint)
-
+    #model.summary()
     if manager.latest_checkpoint:
         print("Restored from {}".format(manager.latest_checkpoint))
+    #else:
+    #    print("ERROR: No Checkpoint file available!", checkpoint_path)
     if debugging:
         print('DEBUGGING show example CNN LOAD weights',model.trainable_variables[0].numpy()[0,0,0,:5])
     verbose=0
@@ -148,7 +215,7 @@ def load_CNN(grid_params, input_shape, num_classes,debugging,ckpt,manager,checkp
 
     return model,ckpt,manager,[[train_loss, train_acc],[val_loss, val_acc],[test_loss, test_acc]]
 
-def load_VAE(params,add_info,num_classes,input_shape,checkpoint_path,path=''):
+def load_VAE(params,add_info,num_classes,input_shape,checkpoint_path,mask,path='',mlp_path=''):
     model = Resnet_VAE(
         filter_size=params.filter_size,
         num_layer=params.num_layer,
@@ -171,7 +238,31 @@ def load_VAE(params,add_info,num_classes,input_shape,checkpoint_path,path=''):
         loss_weights=params.loss_weights,
         VAE_fine_tune=params.VAE_fine_tune,
         path=path,
-        use_KLD_anneal=params.use_KLD_anneal)
+        use_KLD_anneal=params.use_KLD_anneal,
+        use_GAN=params.GAN,
+        gauss_std=params.gauss_std,
+        encoder=None,
+        conv_dim=params.conv_dim,
+        rec_loss_name=params.rec_loss,
+        cone_mask_tf=mask
+    )
+    '''
+    #debugging:
+    # Lade das Checkpoint-Objekt
+    ckpt_path = tf.train.latest_checkpoint(checkpoint_path)
+    reader = tf.train.load_checkpoint(ckpt_path)
+
+    # Hole alle Tensor-Namen + Shapes
+    var_to_shape_map = reader.get_variable_to_shape_map()
+
+    for name in var_to_shape_map:
+        shape = var_to_shape_map[name]
+        if shape == [65] or shape == [64]:
+            print(f"{name}: shape={shape}")
+    '''
+
+
+
 
     # print model summary
     #model.summary()
@@ -180,16 +271,23 @@ def load_VAE(params,add_info,num_classes,input_shape,checkpoint_path,path=''):
     ckpt.restore(manager.latest_checkpoint)
     #model.summary()
     #restored=0
+    print( 'LOAD FROM',checkpoint_path)
     if manager.latest_checkpoint:
         print("Restored from {}".format(manager.latest_checkpoint))
+
+    if mlp_path!='':
+        print('NOT implemented')
+        ckpt_mlp = tf.train.Checkpoint(step=tf.Variable(1), net=model.clf_model)
+        manager_mlp = tf.train.CheckpointManager(ckpt_mlp, checkpoint_path, max_to_keep=1)
+        ckpt_mlp.restore(manager_mlp.latest_checkpoint)
     #    restored=1
     return model
 
 
 
 def load_VAE_and_eval(params, input_shape, num_classes,debugging,ckpt,manager,checkpoint_path,
-             train_dataset,test_dataset,val_dataset,add_info):
-    model=load_VAE(params,add_info,num_classes,input_shape,checkpoint_path)
+             train_dataset,test_dataset,val_dataset,add_info,mask):
+    model=load_VAE(params,add_info,num_classes,input_shape,checkpoint_path,mask)
     #else:
     #    print("ERROR: No Checkpoint file available!", checkpoint_path)
     if debugging:
@@ -208,11 +306,227 @@ def load_VAE_and_eval(params, input_shape, num_classes,debugging,ckpt,manager,ch
 
     return model,ckpt,manager,[[train_losses],[val_losses],[test_losses]]
 
+class LossHistory(tf.keras.callbacks.Callback):
+    def on_batch_end(self, batch, logs=None):
+        print(f'Batch {batch} - Loss: {logs["loss"]}')
+
+class BatchNormTracker(tf.keras.callbacks.Callback):
+    def __init__(self, model, layer_indices):
+        super(BatchNormTracker, self).__init__()
+        self.model = model
+        self.layer_indices = layer_indices
+        #for i, layer in enumerate(self.model.layers):
+        #    print(i, layer.name, layer.__class__.__name__)
+
+    def on_epoch_end(self, epoch, logs=None):
+        #for i, layer in enumerate(self.model.layers[0].layers):
+        #    print('on epoch end',i, layer.name, layer.__class__.__name__)
+        #layer=self.model.layers[1]
+        #mean, variance = np.round(layer.moving_mean.numpy()[:5], decimals=2), np.round(
+        #    layer.moving_variance.numpy()[:5], decimals=2)
+        #print(f"Epoch {epoch + 1} - Layer {layer.name}: Mean = {mean}, Variance = {variance}")
+        for idx in self.layer_indices:
+            layer = self.model.layers[0].layers[idx]
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                mean, variance = np.round(layer.moving_mean.numpy()[:5],decimals=2), np.round(layer.moving_variance.numpy()[:5],decimals=2)
+                print(f"Epoch {epoch+1} - Layer {layer.name}: Mean = {mean}, Variance = {variance}")
+
+    def on_test_end(self, logs=None):
+        #for i, layer in enumerate(self.model.layers[0].layers):
+        #    print('on test end',i, layer.name, layer.__class__.__name__)
+        #layer=self.model.layers[1]
+        #mean, variance = np.round(layer.moving_mean.numpy()[:5], decimals=2), np.round(
+        #    layer.moving_variance.numpy()[:5], decimals=2)
+        #print(f"Evaluation - Layer {layer.name}: Mean = {mean}, Variance = {variance}")
+        for idx in self.layer_indices:
+            layer = self.model.layers[0].layers[idx]
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                mean, variance = np.round(layer.moving_mean.numpy()[:5],decimals=2), np.round(layer.moving_variance.numpy()[:5],decimals=2)
+                print(f"Evaluation - Layer {layer.name}: Mean = {mean}, Variance = {variance}")
+
+
+def efficient_net_pre_finetune(i, train_data, test_data, val_data,num_classes, binary, debug, model_name='efficientnet_pretrain'):
+    train_start = time.time()
+    batch_size=15
+    epochs=30
+    model_path = 'models/' + model_name+str(i)
+    train_dataset = tf.data.Dataset.from_tensor_slices((train_data[0], train_data[1])).shuffle(10).batch(batch_size)
+    test_dataset = tf.data.Dataset.from_tensor_slices((test_data[0], test_data[1])).shuffle(10).batch(batch_size)
+    val_dataset = tf.data.Dataset.from_tensor_slices((val_data[0], val_data[1])).shuffle(10).batch(batch_size)
+
+    #base_model= tf.keras.applications.ResNet50(weights='imagenet',include_top = False,input_shape = (128,128,3),pooling='max')
+    #base_model = tf.keras.models.load_model('efficientnetb7_saved_model')
+    base_model = create_base_CNN((128,128,3))#
+    #base_model = tf.keras.models.load_model('Resnet50_kmnist_56')#('Resnet50')
+    #base_model = tf.keras.models.load_model('efficientnetb7_saved_model_tf2_13')
+    #base_model = tf.keras.applications.EfficientNetB7(weights='imagenet', include_top=False, input_shape=(128, 128, 3),
+    #                                             pooling='max')
+
+    ###############################################################################################################
+    layer = base_model.layers[3]
+    if isinstance(layer, tf.keras.layers.BatchNormalization):
+        mean, variance = np.round(layer.moving_mean.numpy()[:5], decimals=2), np.round(
+            layer.moving_variance.numpy()[:5],
+            decimals=2)
+        print(f"DEBUGGING LOAD MODEL - Layer {layer.name}: Mean = {mean}, Variance = {variance}")
+    ###############################################################################################################
+    # Freeze the base model's layers
+    #base_model.trainable = False
+    # Freeze BatchNormalization layers
+    #for layer in base_model.layers:
+        #if isinstance(layer, tf.keras.layers.BatchNormalization):
+    #    layer.trainable = False
+    model = Sequential([
+        base_model,
+        layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001),
+        layers.Dense(256, kernel_regularizer=regularizers.l2(l=0.016), activity_regularizer=regularizers.l1(0.006),
+              bias_regularizer=regularizers.l1(0.006), activation='relu'),
+        layers.Dropout(rate=0.4, seed=75),
+        layers.Dense(num_classes)#, activation='softmax'
+    ])
+
+    # Example usage with the identified BatchNormalization layers
+    layer_indices = [5]#[172]#,169]#[808, 812]  # Example indices; replace with actual indices of BatchNormalization layers
+    tracker = BatchNormTracker(base_model, layer_indices)
+    opt=tf.keras.optimizers.Adamax(learning_rate=0.001)##tf.keras.optimizers.Adam(learning_rate=0.0001)
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    model.compile(opt,
+                  loss=loss,
+                  metrics=['accuracy']
+                  )
+
+    #model.summary()
+
+    #for i, layer in enumerate(base_model.layers):
+    #    print(i, layer.name, layer.__class__.__name__)
+    #layer_names=['top_bn','block7d_project_bn']
+
+
+
+
+    val_loss = model.evaluate(val_dataset, verbose=2 )[0]
+    print('CNN val loss:', val_loss,'num trainable vars:',len( model.trainable_variables))
+    best_val_loss=200
+    verbose=2
+    #for lay in model.trainable_variables:
+    #    print('Debug trainable vars',lay.name)
+    for epoch in range(epochs):
+        #history = LossHistory()
+
+        #train(model,train_data,train_data,batch_size=batch_size,opt=opt,loss_fkt=loss)
+
+        model.fit(train_data[0], train_data[1], epochs=1,  verbose=verbose,
+                  validation_data=(train_data[0], train_data[1]),#train_dataset,
+                  callbacks=[tracker],shuffle=True,batch_size=batch_size)# callbacks=[history]
+
+        val_loss = model.evaluate(val_dataset, verbose=verbose)[0]#,callbacks=[tracker]
+        improve = False
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            # Save the model weights
+            tf.keras.models.save_model(
+                model, model_path,
+                options=tf.saved_model.SaveOptions(experimental_custom_gradients=True))
+
+            improve = True
+            #print('INITIAL weights', model.trainable_variables[0].numpy()[0, 0, 0, :5])
+        print('CNN val loss:', val_loss, 'improve', improve,flush=True)
+    # show short evaluation:
+    train_loss, train_acc = model.evaluate(train_dataset, verbose=verbose)
+    test_loss, test_acc = model.evaluate(test_dataset, verbose=verbose)
+    val_loss, val_acc = model.evaluate(val_dataset, verbose=verbose)
+    ###########################################################
+    # do predictions with train = True / False
+
+
+    print('CNN train entropy',train_loss,'train acc', train_acc,'val entro:',val_loss, 'val acc:',val_acc,'test entropy',
+          test_loss, 'test acc',test_acc,'train+eval time',(time.time()-train_start)//60,flush=True)
+
+    pred_1=[]
+    pred_2=[]
+    gt=[]
+    for i in range(5):
+        random_idx=np.random.choice(list(range(train_data[0].shape[0])),batch_size)
+        #print(train_data[0][i*25:(i+1)*25])
+        #print(train_data[1][i*25:(i+1)*25])
+        p=model(train_data[0][random_idx],training=True)#i*25:(i+1)*25
+        p2 = model(train_data[0][random_idx], training=False)
+        gt.extend(train_data[1][random_idx])
+        pred_1.extend(p)
+        pred_2.extend(p2)
+
+    for prediction,label in zip([pred_1,pred_2],['training','testing']):
+        prediction=np.asarray(prediction)
+        print(label,'prediction',prediction[:10])
+        print(label,'gt',gt[:10])
+        entropy=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)(gt,prediction).numpy()
+        prediction_exponential=tf.math.exp(prediction)
+        print(label,'exponential',prediction_exponential[:10])
+        arg_max=np.argmax(prediction_exponential,axis=-1)
+        print(label,'argmax',arg_max[:10])
+        acc = accuracy_score(gt, arg_max, normalize=True)
+        pred_exp = np.nan_to_num(prediction_exponential[:, 1], nan=0, posinf=1.0)
+        fpr, tpr, thresholds = sk_metrics.roc_curve(gt,pred_exp,pos_label=1)
+        auc = sk_metrics.auc(fpr, tpr)
+        print('debug eval',label,'entro',entropy,'acc',acc,'auc',auc)
+    #### eval
+
+
+
+
+
+
+
+
+
+
+
+
+def load_pretrain(grid_params,input_shape,num_classes,split):
+    # Load the pretrained EfficientNetB7 model
+    #base_model = tf.keras.applications.EfficientNetB7(weights='imagenet',include_top = False,input_shape = input_shape)
+    #base_model.save('efficientnetb7_saved_model')
+    base_model=tf.keras.models.load_model('models/' + 'model0'+str(split))#('efficientnetb7_saved_model')
+
+    print('STOP-----')
+    # freeze
+    print('num layers in base model',len(base_model.layers))
+    for layer in base_model.layers:
+        layer.trainable = False
+
+    layer_name ='block4a_activation'# 'block7a_project_conv'
+    x =base_model.get_layer(layer_name).output
+    # Add new dropout layer with a custom rate
+    x = layers.Dropout(grid_params.dropout)(x)  # Adjust dropout rate as needed
+    # Add conv layer to reduce filter size:
+
+    x=layers.Conv2D(grid_params.last_num_filters,grid_params.filter_size, padding='same', activation='relu')(x)
+    x=tf.keras.layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001)(x)
+
+    x = layers.Dropout(grid_params.dropout/2)(x)  # Adjust dropout rate as needed
+
+    x=layers.MaxPooling2D(pool_size=(8, 8))(x)
+    x=layers.Flatten()(x)
+    x=layers.Dense(num_classes, name="outputs")(x)
+
+    last_conv_layer_model = tf.keras.models.Model(inputs=base_model.input, outputs=x)
+    ########################
+    '''
+    layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001),
+    layers.Dense(256, kernel_regularizer=regularizers.l2(l=0.016), activity_regularizer=regularizers.l1(0.006),
+                 bias_regularizer=regularizers.l1(0.006), activation='relu'),
+    layers.Dropout(rate=0.4, seed=75),
+    layers.Dense(num_classes)  # , activation='softmax'
+    '''
+    ########################
+
+
+    return last_conv_layer_model
 
 
 
 def load_pretrain_costume(grid_params,input_shape,num_classes):
-    base_model = tf.keras.models.load_model('efficientnetb7_saved_model')
+    base_model = tf.keras.models.load_model('pretrained_models/efficientnetb7_saved_model')
 
     print('STOP-----')
     # freeze
@@ -244,6 +558,18 @@ def load_pretrain_costume(grid_params,input_shape,num_classes):
     x = layers.MaxPooling2D(pool_size=(8, 8))(x)
     x = layers.Flatten()(x)
     x = layers.Dense(num_classes, name="outputs")(x)
+    #model = tf.keras.models.Model(inputs=base_model.input, outputs=x)
+    '''
+
+    model = Sequential([
+        base_model,
+        tf.keras.layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001),
+        tf.keras.layers.Dense(256, kernel_regularizer=regularizers.l2(l=0.016), activity_regularizer=regularizers.l1(0.006),
+              bias_regularizer=regularizers.l1(0.006), activation='relu'),
+        tf.keras.layers.Dropout(rate=0.4, seed=75),
+        tf.keras.layers.Dense(num_classes)#, activation='softmax'
+    ])
+    '''
 
     model = tf.keras.models.Model(inputs=net_input, outputs=x)
     return model
@@ -259,6 +585,9 @@ def train_embedding_cnn(grid_params, val_data,input_shape,
     if add_info:
         val_dataset = tf.data.Dataset.from_tensor_slices(
             (val_data[0], val_data[1][:, 0].astype(int))).shuffle(10).batch(grid_params.batch_size)
+    else:
+        val_dataset = tf.data.Dataset.from_tensor_slices(
+            (val_data[0], val_data[1])).shuffle(10).batch(grid_params.batch_size)
 
     if grid_params.load_pretrain_model:
         #model=load_pretrain(grid_params,input_shape,num_classes,split)
@@ -268,14 +597,37 @@ def train_embedding_cnn(grid_params, val_data,input_shape,
 
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)#tf.keras.optimizers.Adamax(learning_rate = 0.001) #
     else:
+        # TODO debugging :(
+        '''
+        base_model=create_base_CNN(input_shape)
+        model = Sequential([
+            base_model,
+            #layers.BatchNormalization(axis=-1, momentum=0.99, epsilon=0.001),
+            #layers.Dense(256, kernel_regularizer=regularizers.l2(l=0.016), activity_regularizer=regularizers.l1(0.006),
+            #             bias_regularizer=regularizers.l1(0.006), activation='relu'),
+            #layers.Dropout(rate=0.4, seed=75),
+            layers.Dense(num_classes)  # , activation='softmax'
+        ])
+        '''
+        #optimizer = tf.keras.optimizers.Adamax(learning_rate=0.001)  ##tf.keras.optimizers.Adam(learning_rate=0.0001)
 
+        #loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+
+
+        # this was the original code:
         model=create_CNN(grid_params,input_shape,num_classes,add_info)
-
+        '''
+        model = Sequential([
+            base_model,
+            layers.Dense(num_classes)  # , activation='softmax'
+        ])
+        '''
 
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
     if num_classes==1:
         loss=tf.keras.losses.MeanSquaredError()
         metrics = ['MAE']
+        acc_stop=False
     else:
         loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
         #loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)
@@ -285,7 +637,9 @@ def train_embedding_cnn(grid_params, val_data,input_shape,
     # Todo if path exists - delete model! - do not use old model - critical for gridsearch
     ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=optimizer, net=model)
     manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=1)
-
+    #model.fit(train_dataset, epochs=30,
+    #          validation_data=val_dataset,
+    #          verbose=verbose)
 
 
     if acc_stop:
@@ -337,15 +691,75 @@ def train_embedding_cnn(grid_params, val_data,input_shape,
                     ckpt.step.assign_add(1)
                     manager.save()
                     improve=True
+
+                    y_preds = []
+                    y_true = []
+
+                    for batch_x, batch_y in val_dataset:
+                        preds = model(batch_x, training=False)  # forward pass
+                        y_preds.append(preds.numpy())
+                        y_true.append(batch_y.numpy())
+
+                    # Step 2: Concatenate all predictions and labels
+                    y_preds = np.concatenate(y_preds, axis=0).squeeze()
+                    y_true = np.concatenate(y_true, axis=0).squeeze()
+
+                    # Step 3: Compute Spearman correlation
+                    spearman_corr, _ = spearmanr(y_true, y_preds)
+
+                    print("Spearman correlation:", spearman_corr)
+
+
+
+
+
                     print('INITIAL weights', model.trainable_variables[0].numpy()[0, 0, 0, :5])
             print('CNN val loss:', val_loss,acc_loss,'improve',improve,'time:',(time.time()-start_time_train)/60)
+            
+############################################################################
+        '''
+        if grid_params.load_pretrain_model:
+            print('###############second train phase')
+            # train again with all layers:)
+            for layer in model.layers:
+                layer.trainable = True
+            for epoch in range(epochs // 2):
+                model.fit(train_dataset, epochs=1,
+                          # validation_data=val_dataset,
+                          verbose=verbose)
+                val_loss = model.evaluate(val_dataset, verbose=2)[0]
+                improve = False
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    # Save the model weights
+                    ckpt.step.assign_add(1)
+                    manager.save()
+                    improve = True
+                    print('INITIAL weights', model.trainable_variables[0].numpy()[0, 0, 0, :5])
+                print('CNN val loss:', val_loss, 'improve', improve)
+        '''
 
+
+
+        #print('Model is fit :)')
+
+
+    #model.summary()
+    #print('DEBUG fitting time', (time.time() - fit_time_start) / 60)
+
+    #model.save("vanilla_cnn_model.h5", save_format='h5')
+    #print('Show all trainable variables:')
+    #for train_var in model.variables:
+    #    print('name of the variable', train_var.name)
+
+    # freeze model weights
+    #model.trainable = False
 
     return model,manager,ckpt
 
-
-def validate_data(val_dataset,add_info,model,beta=0):
-    losses = np.zeros((4 + 2))
+'''
+def validate_data(val_dataset,add_info,model,beta=0,pretrain=0):
+    losses = np.zeros((4 + len(model.loss_fkts)))
     num_rounds = 0
     predictions = []
     all_z = []
@@ -362,8 +776,9 @@ def validate_data(val_dataset,add_info,model,beta=0):
         losses[0] += loss.numpy()
         losses[1] += rec_loss.numpy()
         losses[2] += kld.numpy()
-        losses[3] += clf.numpy()
-        predictions.extend(pred.numpy().tolist())
+        if not pretrain:
+            losses[3] += clf.numpy()
+            predictions.extend(pred.numpy().tolist())
         gt.extend(test_y.numpy().tolist())  # .numpy()
         for i, tmp_loss in enumerate(other_losses):
             losses[4 + i] += tf.reduce_mean(tmp_loss)
@@ -371,13 +786,87 @@ def validate_data(val_dataset,add_info,model,beta=0):
 
         num_rounds += 1
     return all_z,predictions,gt,losses,num_rounds
+'''
+def validate_data(val_dataset, add_info, model, beta=0, pretrain=False):
+    if pretrain:
+        losses = np.zeros((3 + len(model.loss_fkts)))
+        num_rounds = 0
+        all_z = []
+        gt = []
+
+        for val_rec in val_dataset:
+            if add_info:
+                test_x, test_y, test_other = val_rec
+            else:
+                test_x, test_y = val_rec
+                test_other = None  # nur der Vollständigkeit halber
+
+            loss, rec_loss, kld, other_losses, z, x_rec = model.execute_net_pretrain_func(
+                test_x, training=False, beta=beta
+            )
+            if not num_rounds:
+                print("before update rec min/max", np.min(x_rec.numpy()), np.max(x_rec.numpy()))
+            losses[0] += loss.numpy()
+            losses[1] += rec_loss.numpy()
+            losses[2] += kld.numpy()
+
+            for i, tmp_loss in enumerate(other_losses):
+                losses[3 + i] += tf.reduce_mean(tmp_loss).numpy()
+
+            all_z.append([z.numpy(), test_y.numpy().tolist()])
+            gt.extend(test_y.numpy().tolist())
+            num_rounds += 1
+
+        return all_z, [], gt, losses, num_rounds
+
+    else:
+        losses = np.zeros((4 + len(model.loss_fkts)))
+        num_rounds = 0
+        predictions = []
+        all_z = []
+        gt = []
+
+        for val_rec in val_dataset:
+            if add_info:
+                test_x, test_y, test_other = val_rec
+            else:
+                test_other = None
+                test_x, test_y = val_rec
+
+            loss, rec_loss, kld, clf, other_losses, pred, z, _ = model.execute_net_xy_func(
+                test_x, test_y, test_other, training=False, beta=beta
+            )
+
+            losses[0] += loss.numpy()
+            losses[1] += rec_loss.numpy()
+            losses[2] += kld.numpy()
+            losses[3] += clf.numpy()
+
+            predictions.extend(pred.numpy().tolist())
+            gt.extend(test_y.numpy().tolist())
+
+            for i, tmp_loss in enumerate(other_losses):
+                losses[4 + i] += tf.reduce_mean(tmp_loss).numpy()
+
+            all_z.append([z.numpy(), test_y.numpy().tolist()])
+            num_rounds += 1
+
+        return all_z, predictions, gt, losses, num_rounds
 
 def beta_scheduler(epoch, total_epochs,epoch_steps=100, max_beta=1.0):
     # Linear annealing
     return min(max_beta, (epoch%epoch_steps) / epoch_steps)
 
-def load_model(params,num_classes,add_info,checkpoint_path,checkpoint_path_tmp,le_warmup,input_shape,encoder,init=True):
+def load_model(params,num_classes,add_info,checkpoint_path,checkpoint_path_tmp,le_warmup,input_shape,encoder,init=True,pretrain=False,cone_mask_tf=None):
     print(input_shape)
+    # stage-specific settings
+    if pretrain:
+        stage_lr = params.learning_rate
+        stage_loss_weights = [params.loss_weights[0], params.loss_weights[1], 0.0]
+    else:
+        stage_lr = params.learning_rate
+        stage_loss_weights = list(params.loss_weights)
+
     model = Resnet_VAE(
         filter_size=params.filter_size,
         num_layer=params.num_layer,
@@ -391,17 +880,25 @@ def load_model(params,num_classes,add_info,checkpoint_path,checkpoint_path_tmp,l
         strides_decoder=params.strides_decoder,
         latent_dim=params.latent_dim,
         end_dim_enc=params.end_dim_enc,
-        learning_rate=params.learning_rate,
+        learning_rate=stage_lr,
         semi_supervised=params.semi_supervised,
         num_classes=num_classes,
         dropout=params.dropout,
         load_pretrain_model=params.load_pretrain_model,
         add_info=add_info,
-        loss_weights=params.loss_weights,
+        loss_weights=stage_loss_weights,
         VAE_fine_tune=params.VAE_fine_tune,
         use_GAN=params.GAN,
         use_KLD_anneal=params.use_KLD_anneal,
-        le_warmup=le_warmup,gauss_std=params.gauss_std,encoder=encoder)
+        le_warmup=le_warmup,
+        gauss_std=params.gauss_std,
+        encoder=encoder,
+        conv_dim=params.conv_dim,
+        rec_loss_name=params.rec_loss,
+        pretrain=pretrain,
+        cone_mask_tf=cone_mask_tf
+    )
+
     ckpt = tf.train.Checkpoint(step=tf.Variable(1), optimizer=model.optimizer, net=model)
     manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=1)
 
@@ -409,36 +906,83 @@ def load_model(params,num_classes,add_info,checkpoint_path,checkpoint_path_tmp,l
     manager_tmp = tf.train.CheckpointManager(ckpt_tmp, checkpoint_path_tmp, max_to_keep=1)
 
 
+    if not pretrain:
+        ckpt.restore(manager.latest_checkpoint)
+        ckpt_tmp.step.assign_add(1)
+        manager_tmp.save()
+        print('loaded VAE with checkpoints', flush=True)
+    else:
+        print('loaded VAE with checkpoints',flush=True)
 
 
+    '''
     if init:
         ckpt.restore(manager.latest_checkpoint)
         ckpt_tmp.step.assign_add(1)
         manager_tmp.save()
     else:
         ckpt_tmp.restore(manager_tmp.latest_checkpoint)
+    '''
+
 
 
     return model,manager, ckpt,manager_tmp, ckpt_tmp
 
-def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
-                        num_classes, checkpoint_path, load_data, split,add_info,checkpoint_path_tmp,acc_stop=True):
+def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,num_classes, checkpoint_path,
+                        load_data, split,add_info,checkpoint_path_tmp,acc_stop=False,pretrain=True,model_path=''):
     epochs = params.epochs
-    encoder=None
+    encoder=[None]
+    print('before mask',train_data[0].shape)
+    presence = np.percentile(train_data[0], 99, axis=(0, 1, 4))  # (H,W)
+    cone_mask = (presence > 0.02).astype(np.float32)
+    cone_mask_tf = tf.convert_to_tensor(cone_mask, dtype=tf.float32)
+
+    # -> (1,1,H,W,1)
+    cone_mask_tf = cone_mask_tf[tf.newaxis, tf.newaxis, :, :, tf.newaxis]
+    print('after mask',cone_mask.shape,cone_mask_tf.shape)
     if params.load_pretrain_model:
         encoder=make_pretrain_encoder(params.filter_size, num_layer=0, input_shape=input_shape, batchnorm_integration=params.batchnorm_integration, num_filter=0, shortcut=0, strides=0,
-                              activation=0, encoder_name=0, dtype=0, dilations=0, dropout=params.dropout, end_dim=params.end_dim_enc, path='')
+                              activation=0, encoder_name=0, dtype=0, dilations=0,
+                                      dropout=params.dropout, end_dim=params.end_dim_enc, path='')
 
-    model,manager, ckpt,manager_tmp, ckpt_tmp=load_model(params,num_classes,add_info,checkpoint_path,checkpoint_path_tmp,params.le_warmup,input_shape,encoder[0],init=True)
+    model,manager, ckpt,manager_tmp, ckpt_tmp=load_model(params,num_classes,add_info,
+                                                         checkpoint_path,checkpoint_path_tmp,params.le_warmup,
+                                                         input_shape,encoder[0],init=True,pretrain=pretrain,cone_mask_tf=cone_mask_tf)
 
+    if params.dataset_name=='CAMUS':
+        # set batchnorm layer trainable = False!
+        print('######################trainable batchnorm?!')
+        for layer in model.submodules:
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                print(layer.name, layer.trainable)
+        count = 0
+        for layer in model.submodules:  # .embedding
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                layer.trainable = False
+                print(layer.name)
+                count += 1
+        print('BN counter', count)
 
-    train_dataset, test_dataset, val_dataset = data_to_batch(train_data, test_data, val_data, add_info, params.batch_size)
+        for layer in model.submodules:
+            if isinstance(layer, tf.keras.layers.BatchNormalization):
+                print(layer.name, layer.trainable)
+        print('######################trainable batchnorm?!', flush=True)
+    #if not pretrain:
+        # Stage 2, Phase A: nur Regressor
+    #    model.freeze_encoder_decoder()
+
+    train_dataset, test_dataset, val_dataset = data_to_batch(train_data, test_data, val_data, add_info, params)
+
+    test_x=test_data[0][:4]
 
     load_data=0
     all_val_losses=[]
     all_debugging_stuff=[]
     if acc_stop:
-        best_val_loss = 0
+        if num_classes==1:
+            best_val_loss = float('inf')
+        else:
+            best_val_loss = 0
     else:
         print('stop for best loss on L')
         best_val_loss = float('inf')
@@ -446,44 +990,67 @@ def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
         #ckpt.restore(manager.latest_checkpoint)
         print('I used an old Model')
     else:
+        #print('CNN val start', flush=True)
+        if pretrain:
+            _, _, _, losses_init, num_rounds_init = validate_data(
+                val_dataset, add_info, model, beta=0, pretrain=True
+            )
+            val_loss = (losses_init / num_rounds_init)[0]
+        else:
+            val_loss = model.evaluate_(val_dataset, verbose=0)[0]
 
-        val_loss = model.evaluate_(val_dataset, verbose=0, )[0]
-        print('CNN val loss:', val_loss)
+        print('CNN val loss:', val_loss, flush=True)
 
         for epoch in range(epochs):
+            #'''
+            #if not pretrain and epoch == 15:
+            #    print("Unfreeze top encoder layers for gentle finetuning", flush=True)
+            #    model.unfreeze_last_encoder_blocks(n_blocks=2, unfreeze_decoder=False)
+            #if not pretrain and epoch == 20:
+            #    print("Unfreeze all", flush=True)
+            #    model.unfreeze_all()
+            #'''
 
-            #print('Weights before clear session', epoch, model.trainable_variables[0].numpy()[0, 0, 0, :5])
             print('delete',flush=True)
-            del train_dataset,val_dataset
-            train_dataset = None
-            val_dataset = None
+            ##del train_dataset,val_dataset
+            ##train_dataset = None
+            ##val_dataset = None
+            ##gc.collect()  # Python garbage collection
+            ##tf.keras.backend.clear_session()  # Clears the global Keras session
+            ##gc.collect()
 
-            gc.collect()  # Python garbage collection
-            tf.keras.backend.clear_session()  # Clears the global Keras session
-            gc.collect()
-
-            train_dataset, _, val_dataset = data_to_batch(train_data, test_data, val_data, add_info,params.batch_size,randomize=True)
-            print('load finished',flush=True)
-            #if epoch and epoch % 10 == 0:
+            #train_dataset, _, val_dataset = data_to_batch(train_data, test_data, val_data, add_info,params)#,randomize=True)
             warmup=0#1 if epoch==0 and params.le_warmup else 0
-
             cpu_mem_before, gpu_mem_before = get_memory_usage()
 
-            print(
-                f"Epoch {epoch + 1}/{epochs} -| CPU: {cpu_mem_before:.2f} GB | GPU: {gpu_mem_before:.2f} GB",
-                flush=True)
+            print(f"Epoch {epoch + 1}/{epochs} -| CPU: {cpu_mem_before:.2f} GB | GPU: {gpu_mem_before:.2f} GB",flush=True)
 
-            beta = beta_scheduler(epoch, epochs)
+
+            #beta = beta_scheduler(epoch, epochs)
+            if epoch<16:
+                beta= 1e-6
+            else:
+                beta=params.loss_weights[1]
             start_time_train = time.time()
 
             if model.semi_supervised:
+                if pretrain:
+                    train_loss = model.train_pretrain(train_dataset, beta=beta)
+                    loss, rec_loss, kld, mae, mse, huber, ssim, ms_sim = train_loss
+                    print("Pretrain: Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | "
+                          "KLD: {:.4f} | MAE: {:.4f} | MSE: {:.4f} | Huber: {:.4f} | "
+                          "SSIM: {:.4f} | MSSSIM: {:.4f}".format(
+                        epoch, loss, rec_loss, kld, mae, mse, huber, ssim, ms_sim
+                    ), flush=True)
+                else:
+                    train_loss = model.train_semi(train_dataset, beta=beta)
 
 
-                loss, rec_loss, kld, clf_loss, mae, mse = model.train_semi(train_dataset,beta=beta)
-                train_loss=[loss, rec_loss, kld, clf_loss, mae, mse]
-                print("Train Semi | Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | "
-                      "KLD: {:.4f} | Clf Loss: {:.4f} | MAE: {:.4f} | MSE: {:.4f}".format(
-                    epoch, loss, rec_loss, kld, clf_loss, mae, mse),flush=True)
+                    loss, rec_loss, kld, clf_loss, mae, mse, huber,ssim,ms_sim=train_loss
+                    #train_loss=[loss, rec_loss, kld, clf_loss, mae, mse]
+                    print("Train: Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | "
+                          "KLD: {:.4f} | Clf Loss: {:.4f} | MAE: {:.4f} | MSE: {:.4f}| huber: {:.4f}| SSIM: {:.4f}| MSSSIM: {:.4f}".format(
+                        epoch, loss, rec_loss, kld, clf_loss, mae, mse,huber,ssim,ms_sim),flush=True)
 
                 # every 3 epoch do validation:
 
@@ -496,24 +1063,40 @@ def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
 
 
 
-                if epoch%10==0 and not np.isnan(loss):
-                    print('start eval',flush=True)
+                if epoch%5==0 and not np.isnan(loss):
+                    #print('start eval',flush=True)
 
-                    all_z,predictions,gt,losses,num_rounds=validate_data(val_dataset,add_info,model,beta=beta)
-                    all_z_train, predictions_train, gt_train, losses_train, num_rounds_train = validate_data(train_dataset, add_info, model,beta=beta)
+                    all_z,predictions,gt,losses,num_rounds=validate_data(val_dataset,add_info,model,beta=beta,pretrain=pretrain)
+                    all_z_train, predictions_train, gt_train, losses_train, num_rounds_train = validate_data(train_dataset, add_info, model,beta=beta,pretrain=pretrain)
 
 
                     # calculate accuracy:
-                    print('pred shapes',len(predictions),np.asarray(predictions).shape)
-                    softmax_pred=tf.nn.softmax(predictions,axis=-1)
-                    arg_max = np.argmax(softmax_pred, axis=-1)
-                    acc_loss = accuracy_score(gt, arg_max, normalize=True)
-                    balanced_acc = balanced_accuracy_score(gt, arg_max)
+                    #print('pred shapes',len(predictions),np.asarray(predictions).shape)
+                    if not pretrain:
+                        if num_classes>1:
+                            softmax_pred=tf.nn.softmax(predictions,axis=-1)
+                            arg_max = np.argmax(softmax_pred, axis=-1)
+                            acc_loss = accuracy_score(gt, arg_max, normalize=True)
+                            balanced_acc = balanced_accuracy_score(gt, arg_max)
+
+                        else:
+                            #sigmoid_pred = tf.nn.sigmoid(predictions)
+                            predictions=np.asarray(predictions)[:,0]
+                            mae=np.mean(np.abs(predictions-gt))
+                            res = stats.spearmanr(gt,predictions)
+
+                            # results on train data:
+                            predictions_train=np.asarray(predictions_train)[:,0]
+                            mae_train=np.mean(np.abs(predictions_train-gt_train))
+                            res_train = stats.spearmanr(gt_train,predictions_train)
+
+                            #print('example gt - pred ',gt[:5],predictions[:5])
+
                     losses=losses / num_rounds
                     val_loss =losses[0]
-                    losses = np.round(losses, decimals=3)
+                    #losses = np.round(losses, decimals=3)
                     rec=0
-                    if params.VAE_debug:
+                    if False:
                         test_x = test_data[0][:16]
                         train_x=train_data[0][:16]
                         if add_info:
@@ -548,19 +1131,68 @@ def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
                         size_in_mb = size_in_bytes / (1024 ** 2)  # Convert to MB
                         print(f"Memory used by all_debugging_stuff: {size_in_mb:.2f} MB")
                         del test_x,train_x,test_y,train_y
+                    if num_classes>1:
+                        print(
+                            "Val Results Semi | Epoch: {:03d} | Acc Loss: {:.4f} | Balanced Acc: {:.4f} | MAE: {:.4f}|min {:.4f}|max{:.4f}".format(
+                                epoch, acc_loss, balanced_acc, losses[-2], np.min(rec), np.max(rec)), flush=True)
+                    else:
+                        z,gt=zip(*all_z)
+                        z=np.concatenate(z,axis=0)
+                        if pretrain:
+                            loss_val, rec_loss_val, kld_val, mae_val, mse_val, huber_val, ssim_val, ms_sim_val = losses
+                            clf_loss_val=0
+                        else:
+                            loss_val, rec_loss_val, kld_val, clf_loss_val, mae_val, mse_val, huber_val, ssim_val, ms_sim_val = losses
+                        #loss_val, rec_loss_val, kld_val, clf_loss_val, mae_val, mse_val, huber_val,ssim_val,ms_sim_val=losses
 
-                    print(
-                        "Val Results Semi | Epoch: {:03d} | Acc Loss: {:.4f} | Balanced Acc: {:.4f} | MAE: {:.4f}|min {:.4f}|max{:.4f}".format(
-                            epoch, acc_loss, balanced_acc, losses[-2],np.min(rec),np.max(rec)), flush=True)
+                        # Convert to DataFrame for easier correlation
+                        df_z = pd.DataFrame(z)
+
+                        # Correlation matrix (Pearson by default)
+                        corr_matrix = df_z.corr()
+
+                        z_corr=np.abs(corr_matrix.values[np.triu_indices_from(corr_matrix, k=1)])
+                        mean_z_coor=np.mean(z_corr)
+                        median_z_corr=np.median(z_corr)
+                        print(
+                            "Val: Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | KLD: {:.4f} | Clf Loss: {:.4f} "
+                            "| MAE: {:.4f} | MSE: {:.4f}| huber: {:.4f}| SSIM: {:.4f}| MSSSIM: {:.4f}"
+                            "| min {:.4f}| max {:.4f}| mean z corr: {:.4f}| median z corr: {:.4f}"
+                            "| spearman: {:.4f}| CLF MAE{:.4f}; Train: spearman: {:.4f}".format(
+                                epoch, loss_val, rec_loss_val, kld_val, clf_loss_val,
+                                mae_val, mse_val, huber_val, ssim_val, ms_sim_val,
+                                np.min(z), np.max(z), mean_z_coor, median_z_corr,
+                                res.correlation if not pretrain else 0, mae,  # not res
+                                res_train.correlation if not pretrain else 0  # not res_train
+                            ),
+                            'rec min max:', np.min(rec), np.max(rec),
+                            flush=True
+                        )
+                        #print('pred MAE Train',mae_train)
+                        #print('train_spearman',res_train,'val spearman',res)
+                        debug_str=''
+                        for pred in predictions[:10]:
+                            debug_str+=(str(round(pred,2))+'-')
+                        #print('Debug',debug_str)
 
                     improve = False
                     if acc_stop:
-                        if balanced_acc > best_val_loss:
-                            best_val_loss = balanced_acc
-                            ckpt.step.assign_add(1)
-                            manager.save()
-                            improve = True
-                            print('SAVE weights', model.trainable_variables[0].numpy()[0, 0, 0, :5],flush=True)
+                        if num_classes==1:
+                            if losses[3] < best_val_loss:
+                                best_val_loss = losses[3]
+                                # Save the model weights
+                                ckpt.step.assign_add(1)
+                                manager.save()
+                                improve = True
+                                print('SAVE weights')#, model.trainable_variables[0].numpy()[0, 0, 0, :5], flush=True)
+
+                        else:
+                            if balanced_acc > best_val_loss:
+                                best_val_loss = balanced_acc
+                                ckpt.step.assign_add(1)
+                                manager.save()
+                                improve = True
+                                print('SAVE weights')#, model.trainable_variables[0].numpy()[0, 0, 0, :5],flush=True)
 
                     else:
                         if val_loss < best_val_loss:
@@ -569,17 +1201,25 @@ def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
                             ckpt.step.assign_add(1)
                             manager.save()
                             improve = True
-                            print('SAVE weights', model.trainable_variables[0].numpy()[0, 0, 0, :5],flush=True)
-                    print(
-                        "CNN Val Loss: {:.4f} | Acc Loss: {:.4f} | Improve: {} | Time: {:.2f} min | Beta: {:.4f}".format(
-                            val_loss, acc_loss, improve, (time.time() - start_time_train) / 60, beta),flush=True)
+                            print('SAVE weights')
+                            _, _,_, _, _, test_x_rec = model.execute_net_pretrain(test_x, training=False, beta=beta)
+                            save_example_rec(test_x,test_x_rec,
+                                             [mae_val, mse_val, huber_val, ssim_val, ms_sim_val],
+                                             ['MAE', 'MSE', 'HUBER', 'SSIM', 'MS_SIM'],
+                                             out_path=model_path+str(pretrain)+'epoch'+str(epoch)+'.png')
+
+                            #, model.trainable_variables[0].numpy()[0, 0, 0, :5],flush=True)
+                    #print("CNN Val Loss: {:.4f} | Acc Loss: {:.4f} | Improve: {} | Time: {:.2f} min | Beta: {:.4f}".format(val_loss, acc_loss, improve, (time.time() - start_time_train) / 60, beta),flush=True)
 
                     all_val_losses.append(losses)
             else:
-                loss, rec_loss, kld, mae, mse = model.train(train_dataset)
-                print(
-                    "Train | Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | KLD: {:.4f} | MAE: {:.4f} | MSE: {:.4f}".format(
-                        epoch, loss, rec_loss, kld, mae, mse))
+                print('unsupervised!!!')
+                train_loss = model.train(train_dataset)
+                loss, rec_loss, kld, clf_loss, mae, mse, huber,ssim,ms_sim=train_loss
+                #train_loss=[loss, rec_loss, kld, clf_loss, mae, mse]
+                print("Train Semi | Epoch: {:03d} | Loss: {:.4f} | Rec Loss: {:.4f} | "
+                      "KLD: {:.4f} | Clf Loss: {:.4f} | MAE: {:.4f} | MSE: {:.4f}| huber: {:.4f}| SSIM: {:.4f}| MSSSIM: {:.4f}".format(
+                    epoch, loss, rec_loss, kld, clf_loss, mae, mse,huber,ssim,ms_sim),flush=True)
 
                 end_time = time.time()
                 losses = np.zeros((3 + 2))
@@ -626,11 +1266,16 @@ def train_embedding_VAE(params, train_data,test_data,val_data, input_shape,
 
 def get_layer_embeddings(grid_params,model, layer_names, all_datasets,get_max=True,add_info=False):
     print('START EMBEDDING',layer_names)
+    #print(all_datasets[0].shape)
+    # TODO this was the original code
     if grid_params.use_VAE:
         intermediate_layer_model=model.clf_model()
     else:
         layer_output = [model.get_layer(layer_name).output for layer_name in layer_names]
-
+        #layer_output = [model.layers[0].get_layer(layer_name).output for layer_name in layer_names]
+        #print(model.layers[0])
+        #print(layer_output)
+        #intermediate_layer_model = tf.keras.Model(inputs=model.layers[0].input, outputs=layer_output)
         intermediate_layer_model = tf.keras.Model(inputs=model.input,outputs=layer_output)
 
     output_embeds = []
@@ -639,6 +1284,11 @@ def get_layer_embeddings(grid_params,model, layer_names, all_datasets,get_max=Tr
     num_embedding_layers=1
     for ds_idx,input_dataset in enumerate(all_datasets):
         all_batch_embeddings = [[] for _ in range(num_embedding_layers)]
+        #num_instances = input_data.shape[0]
+        #print('batch size', batch_size, 'num instances', num_instances)
+        #steps = num_instances // batch_size
+
+
         for ds_record in input_dataset:
             if add_info:
                 images, labels,other = ds_record
@@ -651,6 +1301,9 @@ def get_layer_embeddings(grid_params,model, layer_names, all_datasets,get_max=Tr
             if grid_params.use_VAE:
                 prediction_0=prediction_0[0]
 
+            #print(prediction_0)
+            #if grid_params.use_VAE:
+            #    prediction_0=[prediction_0]
             all_labels[ds_idx].append(labels.numpy())
 
             if len(layer_names) > 1:
@@ -661,23 +1314,47 @@ def get_layer_embeddings(grid_params,model, layer_names, all_datasets,get_max=Tr
                         diff = np.max(prediction_0[lay], axis=(1, 2))
                     else:
                         diff=prediction_0[lay]
+                    ##print('DEBUg',prediction_0[lay].shape,diff.shape,'layer name',layer_names[lay])
                     all_batch_embeddings[lay].extend(diff)
             else:
                 if get_max:
                     diff = np.max(prediction_0, axis=(1, 2))
                 else:
                     diff=prediction_0
+                #print('DEBUg', prediction_0[0].shape, diff[0].shape, 'layer name', layer_names[0])
+                #print('DEBUg', prediction_0[0].shape, diff.shape, 'layer name', layer_names[lay])
                 all_batch_embeddings[0].extend(diff)
         all_labels[ds_idx]=np.concatenate(all_labels[ds_idx],axis=0)
         if add_info:
             all_other_info[ds_idx] = np.concatenate(all_other_info[ds_idx], axis=0)
+        #print('debug label size',all_labels[ds_idx].shape)
+        '''
+        if num_instances % batch_size:
+            prediction_0 = intermediate_layer_model.predict(input_data[steps * batch_size:, ])
+            if len(layer_names) > 1:
+                for lay in range(len(layer_output)):
+                    ##############################
+                    # TODO avg_pooling layer?!
+                    diff = np.max(prediction_0[lay], axis=(1, 2))
+                    all_batch_embeddings[lay].extend(diff)
+            else:
+                diff = np.max(prediction_0, axis=(1, 2))
+                # print('DEBUg', prediction_0.shape, diff.shape, 'layer name', layer_names[0])
+                all_batch_embeddings[0].extend(diff)
+        '''
 
+        #for lay_data in all_batch_embeddings:
+        #    print('lay data :')
+        #    for entry in lay_data:
+        #        print(entry.shape)
+        #print(all_batch_embeddings[0])
         curr_embeds = [np.stack(entry, axis=0) for entry in all_batch_embeddings]
+        #curr_embeds = [np.concatenate(entry, axis=0) for entry in all_batch_embeddings]
         if len(curr_embeds) > 1:
             concat_embeds = np.concatenate(curr_embeds, axis=-1)
             output_embeds.append(concat_embeds)
         else:
             output_embeds.append(curr_embeds[0])
             print(curr_embeds[0].shape)
-
+    #print('END EMBEDDING')
     return output_embeds,all_labels,all_other_info
