@@ -26,18 +26,19 @@ pip install -r requirements.txt
 
 ### 1. Data Preprocessing
 
-Run the following to preprocess the dataset and enter your Hugging Face access token:
 
 ```bash
-python preprocessing.py
+python dataset_preprocessing/stanford/still_images_preprocessing.py
+python dataset_preprocessing/CAMUS/preprocess_main.py
 ```
 
 ### 2. Model Training
 
+Set save_folder='/data_in/cnn_spn_models/' and data_path='/data_in/cf_data/' in main_pipeline.py to your train data paths of the preprocessing.
 To train the SPN-VAE model, use:
 
 ```bash
-python main_pipeline.py --le_warmup 0 --load_pretrain_model 0 --gauss_std 0.2 --save_path 'test_model' --loss_weights 10.0 0.1 5.0 --dropout 0.0 --epochs 101 --fine_tune_its 0 --use_add_info 1 --use_VAE 1 --VAE_debug 1 --latent_dim 64 --separate_view 0 --learning_rate 0.0001 --fine_tune_rate 0.0001 --batch_size 50
+python main_pipeline.py  --min_features_slice 1 --use_KLD_anneal 0 --epochs 0 --fine_tune_its 52 --conv_dim 3 --rec_loss "MS_SSIM_HUBER" --batchnorm_integration 0 --use_VAE 1 --regression 10 --col_split "rdc" --diff_privacy 0 --machine 'mogon' --dataset_name "$dataset_name" --le_warmup 0 --load_pretrain_model 0 --gauss_std 0.0 --save_path "$save_path" --loss_weights 1.0 $kld 1.0 --dropout 0.0 --use_add_info 0 --VAE_debug 0 --latent_dim 64 --separate_view 0 --learning_rate 0.0001 --fine_tune_rate 0.0001 --batch_size 100 --shortcut 1 --activation "relu" --VAE_fine_tune "SPN_VAE_MLP"
 ```
 
 ### 3. Counterfactual Generation
@@ -45,16 +46,38 @@ python main_pipeline.py --le_warmup 0 --load_pretrain_model 0 --gauss_std 0.2 --
 For creating counterfactuals with the trained model:
 
 ```bash
-python cf_creation.py
+dataset_name="stanford"
+python cf_creation_all.py --filepath "$model_name" --beta 0.001 --gamma 0.001 --model_name="SPN" --fine_tune 1 --dataset_name "$dataset_name"
 ```
 
-### 4. Counterfactual Evaluation
+### 4. Train segmentation and EF model:
+```bash
+python evaluation/segmentation_eval/main_train_segmentation_model.py
+python evaluation/segmentation_eval/main_train_ef_expert.py
+
+```
+
+### 5. Counterfactual Evaluation
 
 Evaluate the generated counterfactuals using:
 
 ```bash
-python main_analysis.py
+dataset_name=("stanford" "CAMUS")
+python main_analysis.py --model_names "$model_names" --eval_method "regression" --fine_tune 1 --dataset_name "$dataset_name"
+python main_analysis.py --model_names "$model_names" --eval_method "cfe" --fine_tune 1 --dataset_name "$dataset_name"
+
+python evaluation/segmentation_eval/main_analysis.py --dataset_name "$dataset_name" --fine_tune 1 --model_names "$model_name"
 ```
+
+### 6. Create output figures for paper
+
+Evaluate the generated counterfactuals using:
+
+```bash
+python evaluation/segmentation_eval/paper_tables_and_plots_v7_tradeoff.py
+python evaluation/segmentation_eval/cf_vizualization_extended.py
+```
+
 
 
 ## Contact

@@ -358,7 +358,6 @@ if __name__ == '__main__':
     if dataset_name=='stanford':
         model_title=('KLD4_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_encrefinchec','')#('KLD4_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_encrefinchec',r'')
         videos_save_folder=['../results/diffusion_results/counterfactual_videos/',
-                            #'/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_merge/eval/counterfactual_videos/'
                             '/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_stanford_seg_merge/eval/counterfactual_videos/'
                             ][work_from]
         weights = ['C:/Users/siekiera/Documents/git_repos/CF_eval/weights/deeplabv3_resnet50_random.pt',
@@ -372,12 +371,10 @@ if __name__ == '__main__':
     else:
         model_title = ('KLD4_MS_SSIM_HUBER_3_CAMUS_DS_1stage_encrefinchec_tmp2', r'')
         videos_save_folder ='/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_CAMUS_merge_show/eval/counterfactual_videos/'
-        #'/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_CAMUS_merge/eval/counterfactual_videos/'
         weights='/lustre/project/ki-topml/jsiekiera/segmentation_weights_camus/best.pt'
         weights_ef='/lustre/project/ki-topml/jsiekiera/ef_pred_weights_echos_pw_camu_bi_le6_20/best.pt'
         data_dir_org_masks='/lustre/project/ki-topml/jsiekiera/cf_data/'
-        #videos_save_folder_org='/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_CAMUS_merge/eval/factual_videos/'
-    data_dir = ['C:/Users/siekiera/Documents/SPNs/data/echos/echonetdynamic-2/EchoNet-Dynamic/EchoNet-Dynamic',
+            data_dir = ['C:/Users/siekiera/Documents/SPNs/data/echos/echonetdynamic-2/EchoNet-Dynamic/EchoNet-Dynamic',
                 '/lustre/project/ki-topml/jsiekiera/EchoNet-Dynamic'][work_from]
 
 

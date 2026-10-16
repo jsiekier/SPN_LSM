@@ -2529,14 +2529,7 @@ if __name__ == "__main__":
     ds='stan_debug'
 
     project_path='/lustre/project/ki-topml/jsiekiera/cnn_spn_models/'
-    spn_names=[#('stan_KLD4_MS_SSIM_HUBER_64_relu_DS_flip','k4_s1_f'),
-               #('stan_KLD4_MS_SSIM_HUBER_64_relu_DS_no_flip','k4_s1_nf'),
-               #('stan_KLD4_MS_SSIM_HUBER_64_relu_DS_2stage_flip','k4_s2_f'),
-               #('stan_KLD5_MS_SSIM_HUBER_64_relu_DS_2stage_flip','k5_s2_f'),
-               ###('stan_KLD4_MS_SSIM_HUBER_64_relu_DS_2stage_noflip','k4'), #'k4_s2_nf'
-                #('KLD4_MS_SSIM_HUBER_4_stanford_DS_1stage_old',''),
-                #('KLD4_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_old',''),
-                #('KLD4_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_encrefin',''),
+    spn_names=[
 
                 ('KLD4_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_encrefinchec','4'),
                 ('KLD5_MS_SSIM_HUBER_3_stanford_seg_DS_1stage_encrefinchec', '5'),
@@ -2546,20 +2539,11 @@ if __name__ == "__main__":
                 #('KLD5_MS_SSIM_HUBER_3_CAMUS_DS_1stage_encrefinchec_tmp2', '5'),
                 #('KLD6_MS_SSIM_HUBER_3_CAMUS_DS_1stage_encrefinchec_tmp2', '6'),
 
-                #('stan_KLD4_MS_SSIM_HUBER_64_relu_DS_2stage_enccheck_nn_mask_sh_1__52','k4')
-                #('stan_KLD3_MS_SSIM_HUBER_64_relu_DS_2stage_enccheck_nn_mask_sh_1__52', 'k3'),
-                #('stanseg_KLD4_MS_SSIM_HUBER_64_relu_DS_2stage_enccheck_nn_mask_sh_1__52', 'k4'),
-                #('stanseg_KLD3_MS_SSIM_HUBER_64_relu_DS_2stage_enccheck_nn_mask_sh_1__52', 'k3')
-
-               #('stan_KLD5_MS_SSIM_HUBER_64_relu_DS_2stage_noflip','k5')
                ] #'k5_s2_nf'
     #TODO consider the huename in the plot of generate_paper_outputs
     grid_str='/grid0/'
     results=[
-        #('/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion/4SCM_merge/eval/counterfactual_videos/segment_analyse.json', "4SCM","v2"),# org stanford
-        #('/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_merge/eval/counterfactual_videos/segment_analyse_.json',"4SCM"), #, "v3")
-        #('/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_CAMUS_merge/eval/counterfactual_videos/segment_analyse_CAMUS_flip.json',"4SCM")#segment_analyse_CAMUS_flip.json
-        #('/fshpc/jsiekier/promotion/SPN_related_work/EchoDiffusion/outputs/diffusion3/4SCM_v3_CAMUS_merge/eval/counterfactual_videos/segment_analyse_.json',"4SCM")
+         ('path/outputs/diffusion3/4SCM_merge/eval/counterfactual_videos/segment_analyse_.json',"4SCM"), #, "v3")
     ]
 
     img_id=f'{ds}_largeSPN_all'

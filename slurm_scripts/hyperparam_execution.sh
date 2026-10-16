@@ -32,9 +32,9 @@ for i in "${!KLD[@]}"; do
                 #dataset_name="$act"
                 # Construct save_path string
                 save_path="KLD${kld_str}_${rec}_${ld_str}_${act}_DS_1stage_encrefinchec" #chec #2stage_flip" #"#_f" # s_g4" # "stan_seg0_KLD${kld_str}_${rec}_${ld}_${act}_100_gauss_00" #  #"stan_seg0_KLD${kld_str}_${rec}_${ld}_${act}_100_gauss_00" #fine_
-                # _old, 
+
                 # Uncomment to submit training jobs
-                #sbatch 1_slurm_train_net "$save_path" "$dataset_name" "$kld" "$rec" 64 "relu" "$ld"
+                sbatch 1_slurm_train_net "$save_path" "$dataset_name" "$kld" "$rec" 64 "relu" "$ld"
                 
                 save_paths+="${save_path},"
             done
@@ -47,7 +47,7 @@ save_paths="${save_paths%,}"
 
 # Submit evaluation job
 sbatch 2_slurm_net_eval "$save_paths" "regression" "$dataset_name"
-# sbatch 2_slurm_net_eval "$save_paths" "cfe" "$dataset_name"
+sbatch 2_slurm_net_eval "$save_paths" "cfe" "$dataset_name"
 
 # Split save_paths into array
 IFS=',' read -ra SAVE_PATH_ARRAY <<< "$save_paths"
@@ -64,9 +64,8 @@ done
 # Calculate CF with fine-tune options
 # -------------------------------
 for model_path in "${SAVE_PATH_ARRAY[@]}"; do
-    #sbatch 3_slurm_calculate_cf_mlp "$model_path"
     for fine_tune in "${FINE_TUNE_OPTIONS[@]}"; do
-        #sbatch 3_slurm_calculate_cf_single_cpu "$model_path" "$fine_tune" "$dataset_name"
+        sbatch 3_slurm_calculate_cf_single_cpu "$model_path" "$fine_tune" "$dataset_name"
         :
     done
 done
